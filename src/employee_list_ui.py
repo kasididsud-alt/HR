@@ -26,8 +26,12 @@ from .employee_delete import soft_delete_employee
 # Helpers
 # -------------------------
 def _safe_str(x) -> str:
-    if x is None or (isinstance(x, float) and pd.isna(x)):
-        return ""
+    try:
+        if x is None or pd.isna(x):
+            return ""
+    except Exception:
+        if x is None:
+            return ""
     return str(x)
 
 
@@ -309,7 +313,7 @@ class EmployeeDetailDialog(QDialog):
             v = row.get(c, "")
             if c == "start_date":
                 v = _fmt_date(v)
-            lines.append(f"{c}: {v}")
+            lines.append(f"{c}: {_safe_str(v)}")
         box.setText("\n".join(lines))
         layout.addWidget(box)
 
@@ -324,7 +328,7 @@ class EmployeeListDialog(QDialog):
     def __init__(self, master_dir: str, parent=None, as_of: pd.Timestamp | None = None):
         super().__init__(parent)
         self.master_dir = master_dir
-        self.as_of = as_of if as_of is not None else pd.Timestamp.today().normalize()
+        self.as_of = pd.Timestamp.today().normalize()
 
         self.setWindowTitle("👥 รายการพนักงาน")
         self.resize(1100, 700)
@@ -348,7 +352,7 @@ class EmployeeListDialog(QDialog):
         self.btn_refresh.clicked.connect(self.reload)
         top.addWidget(self.btn_refresh)
 
-        self.lbl_asof = QLabel(f"คำนวณ ณ: {self.as_of.strftime('%Y-%m-%d')}")
+        self.lbl_asof = QLabel(f"อายุงาน ณ วันนี้: {self.as_of.strftime('%Y-%m-%d')}")
         self.lbl_asof.setStyleSheet("color: #555;")
         top.addWidget(self.lbl_asof)
 
@@ -387,6 +391,8 @@ class EmployeeListDialog(QDialog):
 
     def reload(self):
         try:
+            self.as_of = pd.Timestamp.today().normalize()
+            self.lbl_asof.setText(f"อายุงาน ณ วันนี้: {self.as_of.strftime('%Y-%m-%d')}")
             self.df_all = load_employees_xlsx(self.master_dir)
 
             # only active

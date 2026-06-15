@@ -18,6 +18,8 @@ def find_unknown_names(
             emp = resolve_employee(emp_map, alias_map, v, source_col=col)
             if emp is None:
                 unknown.append({"source_col": col, "alias_name": v})
+    if not unknown:
+        return pd.DataFrame(columns=["source_col", "alias_name"])
     return (
         pd.DataFrame(unknown)
         .drop_duplicates()

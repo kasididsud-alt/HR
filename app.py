@@ -1,7 +1,46 @@
 # app.py
 import sys
 import os
+import importlib.util
 import ctypes
+
+
+def _maybe_relaunch_from_project_venv() -> None:
+    if getattr(sys, "frozen", False):
+        return
+
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    current_python = os.path.realpath(sys.executable)
+    candidates = [
+        os.path.join(base_dir, ".venv311", "bin", "python"),
+        os.path.join(base_dir, ".venv", "bin", "python"),
+        os.path.join(base_dir, "venv", "bin", "python"),
+        os.path.join(base_dir, ".venv", "Scripts", "python.exe"),
+        os.path.join(base_dir, "venv", "Scripts", "python.exe"),
+    ]
+
+    required_modules = ("pandas", "PySide6", "openpyxl")
+    missing_dependency = any(
+        importlib.util.find_spec(module) is None for module in required_modules
+    )
+    old_python = sys.version_info < (3, 10)
+
+    if not old_python and not missing_dependency:
+        return
+
+    for candidate in candidates:
+        if os.path.exists(candidate) and os.path.realpath(candidate) != current_python:
+            os.execv(candidate, [candidate, *sys.argv])
+
+    if old_python:
+        raise RuntimeError(
+            "This app requires Python 3.10 or newer. "
+            "Run it with .venv311/bin/python app.py."
+        )
+
+
+_maybe_relaunch_from_project_venv()
+
 import pandas as pd
 
 from PySide6.QtCore import Qt, QDate
@@ -50,12 +89,12 @@ from src.hospital_import import (
     load_hospital_fee_map,
 )
 
-from src.fee_calc import compute_case_fees, normalize_doctor_name
+from src.fee_calc import compute_case_fees, has_scoring_doctor_prefix, normalize_doctor_name
 from src.alias_audit import find_unknown_names
 
 from src.payroll_detail_ui import PayrollDetailDialog
 from src.doctor_detail_ui import DoctorDetailDialog
-from src.styles import get_style_sheet, apply_modern_style
+from src.styles import get_style_sheet, apply_light_app_palette, apply_modern_style
 from src.app_runtime import asset_path, default_master_dir
 
 import traceback
@@ -326,15 +365,37 @@ class MainWindow(QMainWindow):
         stats_layout.setVerticalSpacing(10)
         self.stats_layout = stats_layout
 
-        self.metric_mode_card, self.metric_mode_value = self._create_metric_card("มุมมอง")
-        self.metric_rows_card, self.metric_rows_value = self._create_metric_card("รายการ")
-        self.metric_found_card, self.metric_found_value = self._create_metric_card("พบทั้งหมด")
-        self.metric_total_card, self.metric_total_value = self._create_metric_card("ยอดรวม")
+        (
+            self.metric_mode_card,
+            self.metric_mode_value,
+            self.metric_mode_label,
+        ) = self._create_metric_card("มุมมอง")
+        (
+            self.metric_rows_card,
+            self.metric_rows_value,
+            self.metric_rows_label,
+        ) = self._create_metric_card("รายการ")
+        (
+            self.metric_monitor_card,
+            self.metric_monitor_value,
+            self.metric_monitor_label,
+        ) = self._create_metric_card("Monitor")
+        (
+            self.metric_scoring_card,
+            self.metric_scoring_value,
+            self.metric_scoring_label,
+        ) = self._create_metric_card("Scoring")
+        (
+            self.metric_total_card,
+            self.metric_total_value,
+            self.metric_total_label,
+        ) = self._create_metric_card("ยอดรวม")
 
         self.metric_cards = [
             self.metric_mode_card,
             self.metric_rows_card,
-            self.metric_found_card,
+            self.metric_monitor_card,
+            self.metric_scoring_card,
             self.metric_total_card,
         ]
         self._relayout_metric_cards(compact=False)
@@ -588,10 +649,75 @@ class MainWindow(QMainWindow):
         report_df["emp_code"] = ""
         report_df["หมายเหตุ"] = "กรอก emp_code ให้ตรงกับพนักงาน แล้วนำข้อมูลนี้ไปเพิ่มใน aliases.xlsx"
 
-        out_bytes = to_excel_bytes({"UnknownNames": report_df})
+        out_bytes = to_excel_bytes(
+            {"UnknownNames": report_df},
+            required_blank_columns={"UnknownNames": ["emp_code"]},
+        )
         with open(report_path, "wb") as f:
             f.write(out_bytes)
         return report_path
+
+    def _build_case_result_highlights(
+        self, case_df: pd.DataFrame, unknown_df: pd.DataFrame | None
+    ) -> list[dict]:
+        if case_df is None or case_df.empty:
+            return []
+
+        highlights: list[dict] = []
+        unknown_by_col: dict[str, set[str]] = {}
+
+        if unknown_df is not None and not unknown_df.empty:
+            for _, row in unknown_df.iterrows():
+                source_col = str(row.get("source_col", "") or "").strip()
+                alias_name = str(row.get("alias_name", "") or "").strip()
+                if source_col and alias_name:
+                    unknown_by_col.setdefault(source_col, set()).add(alias_name)
+
+        row_warned: set[int] = set()
+        monitor_cols = [
+            ("Monitor Tech", "Monitor Fee"),
+            ("Monitor Tech (2)", "Monitor Fee2"),
+        ]
+
+        for row_pos, (_, row) in enumerate(case_df.iterrows()):
+            for source_col, fee_col in monitor_cols:
+                value = str(row.get(source_col, "") or "").strip()
+                if not value or value not in unknown_by_col.get(source_col, set()):
+                    continue
+
+                if row_pos not in row_warned:
+                    highlights.append(
+                        {
+                            "row": row_pos,
+                            "entire_row": True,
+                            "fill": "warn",
+                        }
+                    )
+                    row_warned.add(row_pos)
+
+                highlights.append(
+                    {
+                        "row": row_pos,
+                        "columns": [source_col, fee_col],
+                        "fill": "error",
+                        "comment": (
+                            "ชื่อนี้ยังจับคู่กับพนักงานไม่ได้ "
+                            "จึงยังไม่คำนวณ Monitor Fee สำหรับช่องนี้"
+                        ),
+                    }
+                )
+
+            if "วันที่ตรวจ" in case_df.columns and pd.isna(row.get("วันที่ตรวจ")):
+                highlights.append(
+                    {
+                        "row": row_pos,
+                        "columns": ["วันที่ตรวจ"],
+                        "fill": "error",
+                        "comment": "วันที่ตรวจว่างหรืออ่านวันที่ไม่ได้",
+                    }
+                )
+
+        return highlights
 
     def _show_unknown_names_error(self, unknown_df: pd.DataFrame):
         preview = []
@@ -698,8 +824,7 @@ class MainWindow(QMainWindow):
                 return
             os.makedirs(master_dir, exist_ok=True)
 
-            as_of = self.date_edit.date().toPython()
-            dlg = EmployeeListDialog(master_dir, self, as_of=pd.Timestamp(as_of))
+            dlg = EmployeeListDialog(master_dir, self)
             dlg.exec()
             self.status.setText("✅ เปิดรายการพนักงานแล้ว")
             self.status.setProperty("class", "status-success")
@@ -756,9 +881,9 @@ class MainWindow(QMainWindow):
             
             # Active employees
             if 'start_date' in employees.columns:
-                as_of = pd.Timestamp(self.date_edit.date().toPython())
+                as_of = pd.Timestamp.today().normalize()
                 active_emp = employees[employees['start_date'] <= as_of]
-                summary_content += f"✅ พนักงานที่ทำงานอยู่ (ณ วันที่ {as_of.strftime('%Y-%m-%d')}): {len(active_emp)} คน\n"
+                summary_content += f"✅ พนักงานที่ทำงานอยู่ (ณ วันนี้ {as_of.strftime('%Y-%m-%d')}): {len(active_emp)} คน\n"
                 summary_content += f"🔴 พนักงานที่ยังไม่เริ่มทำงาน: {len(employees) - len(active_emp)} คน\n\n"
             
             # List all employees
@@ -2159,8 +2284,16 @@ class MainWindow(QMainWindow):
 
             self._update_loading_detail("กำลังตรวจสอบรายชื่อที่ยังไม่รู้จัก")
             unknown_df = find_unknown_names(cases_df, emp_map, alias_map)
+            unknown_report_path = ""
+            unknown_count = 0
             if unknown_df is not None and not unknown_df.empty:
-                self._export_unknown_names_report(unknown_df)
+                unknown_count = len(unknown_df)
+                unknown_report_path = self._export_unknown_names_report(unknown_df)
+                self.status.setText(
+                    f"⚠️ พบชื่อที่ยังไม่ได้ผูก alias {unknown_count} รายการ "
+                    "กำลังคำนวณเฉพาะรายชื่อที่จับคู่ได้"
+                )
+                self.status.setProperty("class", "status")
 
             self._update_loading_detail("กำลังคำนวณค่าตอบแทน")
             (
@@ -2208,7 +2341,13 @@ class MainWindow(QMainWindow):
                 self, "บันทึกผลลัพธ์ Excel", "fee_result.xlsx", "Excel Files (*.xlsx)"
             )
             if not out_path:
-                self.status.setText("⏸️ คำนวณเสร็จ (ยังไม่บันทึก)")
+                if unknown_report_path:
+                    self.status.setText(
+                        "⚠️ คำนวณเสร็จ (ยังไม่บันทึก) "
+                        f"และพบชื่อที่ต้องผูก alias {unknown_count} รายการ"
+                    )
+                else:
+                    self.status.setText("⏸️ คำนวณเสร็จ (ยังไม่บันทึก)")
                 self.status.setProperty("class", "status")
                 return
 
@@ -2220,15 +2359,32 @@ class MainWindow(QMainWindow):
                 columns=["join_key"], errors="ignore"
             )
 
+            export_sheets = {
+                "CaseResult": case_out_export,
+                "PayrollSummary": self.emp_summary_all,
+                "PayDetails": pay_details_export,
+                "PhysicianByHospital": physician_by_hospital,
+                "DoctorSummary": self.doctor_summary_all,
+                "DoctorDetails": doctor_details_export,
+            }
+            required_blank_columns = {}
+            if unknown_df is not None and not unknown_df.empty:
+                review_export = unknown_df.copy()
+                review_export["emp_code"] = ""
+                review_export["หมายเหตุ"] = (
+                    "กรอก emp_code ให้ตรงกับพนักงาน แล้วนำข้อมูลนี้ไปเพิ่มใน aliases.xlsx"
+                )
+                export_sheets["AliasesToReview"] = review_export
+                required_blank_columns["AliasesToReview"] = ["emp_code"]
+
             out_bytes = to_excel_bytes(
-                {
-                    "CaseResult": case_out_export,
-                    "PayrollSummary": self.emp_summary_all,
-                    "PayDetails": pay_details_export,
-                    "PhysicianByHospital": physician_by_hospital,
-                    "DoctorSummary": self.doctor_summary_all,
-                    "DoctorDetails": doctor_details_export,
-                }
+                export_sheets,
+                highlights={
+                    "CaseResult": self._build_case_result_highlights(
+                        case_out_export, unknown_df
+                    )
+                },
+                required_blank_columns=required_blank_columns,
             )
             self._update_loading_detail("กำลังบันทึกไฟล์ Excel")
             try:
@@ -2244,8 +2400,23 @@ class MainWindow(QMainWindow):
                 )
                 return
 
-            show_info(self, "สำเร็จ", f"✅ คำนวณและบันทึกผลลัพธ์แล้ว:\n{out_path}")
-            self.status.setText("✅ คำนวณเสร็จแล้ว")
+            success_msg = f"✅ คำนวณและบันทึกผลลัพธ์แล้ว:\n{out_path}"
+            if unknown_report_path:
+                success_msg += (
+                    "\n\n⚠️ มีชื่อ Monitor ที่ยังจับคู่กับพนักงานไม่ได้ "
+                    f"{unknown_count} รายการ\n"
+                    "ระบบคำนวณเฉพาะรายชื่อที่จับคู่ได้ และสร้างไฟล์ตรวจสอบไว้ที่:\n"
+                    f"{unknown_report_path}\n\n"
+                    "ในไฟล์ผลลัพธ์ แถวที่ต้องตรวจสอบจะถูกไฮไลต์สีเหลือง/ส้มในชีท CaseResult"
+                )
+
+            show_info(self, "สำเร็จ", success_msg)
+            if unknown_report_path:
+                self.status.setText(
+                    f"✅ คำนวณเสร็จแล้ว (มีชื่อรอผูก alias {unknown_count} รายการ)"
+                )
+            else:
+                self.status.setText("✅ คำนวณเสร็จแล้ว")
             self.status.setProperty("class", "status-success")
 
         except Exception as e:
@@ -2367,7 +2538,65 @@ class MainWindow(QMainWindow):
         label.setProperty("class", "metric-label")
         layout.addWidget(label)
 
-        return frame, value
+        return frame, value, label
+
+    def _set_metric_tooltips(self, mode: str):
+        if mode == "DOC":
+            self.metric_monitor_label.setText("พบทั้งหมด")
+            self.metric_scoring_label.setText("แยกประเภท")
+            tips = {
+                self.metric_mode_card: "มุมมองปัจจุบัน: แพทย์",
+                self.metric_rows_card: (
+                    "จำนวนแถวแพทย์ที่แสดงอยู่ในตารางตอนนี้ "
+                    "หลังใช้ช่องค้นหา"
+                ),
+                self.metric_monitor_card: (
+                    "ผลรวมคอลัมน์ found_count ของแพทย์ที่แสดงอยู่\n"
+                    "นับจาก Interpret MD เป็นหลัก\n"
+                    "Scoring Tech จะนับเป็นแพทย์เฉพาะแถวที่คำนำหน้ามีค่า"
+                ),
+                self.metric_scoring_card: (
+                    "มุมมองแพทย์ยังไม่ได้แยก Monitor/Scoring\n"
+                    "ใช้การ์ดพบทั้งหมดสำหรับจำนวนเคสแพทย์รวม"
+                ),
+                self.metric_total_card: (
+                    "ผลรวมคอลัมน์ total_amount ของแพทย์ที่แสดงอยู่\n"
+                    "มาจาก Physician Fee และบวก Scoring Fee เพิ่มเมื่อแพทย์อยู่ใน Scoring Tech "
+                    "พร้อมคำนำหน้า"
+                ),
+            }
+        else:
+            self.metric_monitor_label.setText("Monitor")
+            self.metric_scoring_label.setText("Scoring")
+            tips = {
+                self.metric_mode_card: "มุมมองปัจจุบัน: พนักงาน",
+                self.metric_rows_card: (
+                    "จำนวนแถวพนักงานที่แสดงอยู่ในตารางตอนนี้ "
+                    "หลังใช้ช่องค้นหา\n"
+                    "มาจาก PayrollSummary หนึ่งแถวต่อ emp_code/display_name"
+                ),
+                self.metric_monitor_card: (
+                    "ผลรวมคอลัมน์ monitor_count ของพนักงานที่แสดงอยู่\n"
+                    "monitor_count มาจาก PayDetails role MonitorTech/MonitorTech2\n"
+                    "จำนวนนี้มาจากเคสที่มี Monitor Fee หรือ Monitor Fee2"
+                ),
+                self.metric_scoring_card: (
+                    "ผลรวมคอลัมน์ scoring_count ของพนักงานที่แสดงอยู่\n"
+                    "scoring_count มาจาก PayDetails role ScoringTech\n"
+                    "จำนวนนี้มาจากเคสที่มี Scoring Fee"
+                ),
+                self.metric_total_card: (
+                    "ผลรวมคอลัมน์ total_amount ของพนักงานที่แสดงอยู่\n"
+                    "total_amount = monitor_amount + scoring_amount\n"
+                    "monitor_amount มาจาก Monitor Fee/Monitor Fee2\n"
+                    "scoring_amount มาจาก Scoring Fee"
+                ),
+            }
+
+        for widget, tip in tips.items():
+            widget.setToolTip(tip)
+            for child in widget.findChildren(QWidget):
+                child.setToolTip(tip)
 
     def _relayout_action_buttons(self, compact: bool):
         if compact:
@@ -2404,23 +2633,25 @@ class MainWindow(QMainWindow):
             positions = [
                 (self.metric_mode_card, 0, 0),
                 (self.metric_rows_card, 0, 1),
-                (self.metric_found_card, 1, 0),
-                (self.metric_total_card, 1, 1),
+                (self.metric_monitor_card, 1, 0),
+                (self.metric_scoring_card, 1, 1),
+                (self.metric_total_card, 2, 0),
             ]
             stretch_count = 2
         else:
             positions = [
                 (self.metric_mode_card, 0, 0),
                 (self.metric_rows_card, 0, 1),
-                (self.metric_found_card, 0, 2),
-                (self.metric_total_card, 0, 3),
+                (self.metric_monitor_card, 0, 2),
+                (self.metric_scoring_card, 0, 3),
+                (self.metric_total_card, 0, 4),
             ]
-            stretch_count = 4
+            stretch_count = 5
 
         for widget, row, col in positions:
             self.stats_layout.addWidget(widget, row, col)
 
-        for i in range(4):
+        for i in range(5):
             self.stats_layout.setColumnStretch(i, 1 if i < stretch_count else 0)
 
     def _apply_responsive_layout(self):
@@ -2445,12 +2676,22 @@ class MainWindow(QMainWindow):
         mode_text = "พนักงาน" if mode == "EMP" else "แพทย์"
         row_count = len(df) if df is not None else 0
 
+        self._set_metric_tooltips(mode)
+
         if df is None or df.empty:
             found_total = 0
+            monitor_total = 0
+            scoring_total = 0
             amount_total = 0.0
         else:
             found_total = int(
                 pd.to_numeric(df.get("found_count", 0), errors="coerce").fillna(0).sum()
+            )
+            monitor_total = int(
+                pd.to_numeric(df.get("monitor_count", 0), errors="coerce").fillna(0).sum()
+            )
+            scoring_total = int(
+                pd.to_numeric(df.get("scoring_count", 0), errors="coerce").fillna(0).sum()
             )
             amount_total = float(
                 pd.to_numeric(df.get("total_amount", 0.0), errors="coerce").fillna(0).sum()
@@ -2458,7 +2699,12 @@ class MainWindow(QMainWindow):
 
         self.metric_mode_value.setText(mode_text)
         self.metric_rows_value.setText(f"{row_count:,}")
-        self.metric_found_value.setText(f"{found_total:,}")
+        if mode == "DOC":
+            self.metric_monitor_value.setText(f"{found_total:,}")
+            self.metric_scoring_value.setText("-")
+        else:
+            self.metric_monitor_value.setText(f"{monitor_total:,}")
+            self.metric_scoring_value.setText(f"{scoring_total:,}")
         self.metric_total_value.setText(f"{amount_total:,.2f}")
 
     def _enrich_doctor_summary(self):
@@ -2484,7 +2730,11 @@ class MainWindow(QMainWindow):
         for key, g in det2.groupby(det2["doctor_key"].astype(str)):
             if not key:
                 continue
-            vc = g["doctor_name_raw"].astype(str).value_counts()
+            source = g.get("source_col", pd.Series("", index=g.index)).astype(str)
+            preferred = g[source.eq("Interpret MD")]
+            if preferred.empty:
+                preferred = g
+            vc = preferred["doctor_name_raw"].astype(str).value_counts()
             name_map[key] = vc.index[0] if len(vc.index) else key
 
         df = df.copy()
@@ -2493,7 +2743,7 @@ class MainWindow(QMainWindow):
 
         case_df = self.case_out.copy() if self.case_out is not None else pd.DataFrame()
         if case_df is not None and not case_df.empty:
-            for col in ["Scoring Tech", "Interpret MD"]:
+            for col in ["คำนำหน้า", "Scoring Tech", "Interpret MD"]:
                 if col not in case_df.columns:
                     case_df[col] = ""
             for col in ["Scoring Fee", "Physician Fee"]:
@@ -2506,7 +2756,10 @@ class MainWindow(QMainWindow):
             case_df["Physician Fee"] = pd.to_numeric(
                 case_df["Physician Fee"], errors="coerce"
             ).fillna(0.0)
-            case_df["_scoring_key"] = case_df["Scoring Tech"].map(normalize_doctor_name)
+            scoring_has_prefix = case_df["คำนำหน้า"].map(has_scoring_doctor_prefix)
+            case_df["_scoring_key"] = case_df["Scoring Tech"].where(
+                scoring_has_prefix, ""
+            ).map(normalize_doctor_name)
             case_df["_interpret_key"] = case_df["Interpret MD"].map(normalize_doctor_name)
 
             doctor_case_rows = []
@@ -2735,6 +2988,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Salary & Fee Calculator")
     app.setOrganizationName("Kasidid")
+    apply_light_app_palette(app)
     icon = _load_app_icon()
     if not icon.isNull():
         app.setWindowIcon(icon)

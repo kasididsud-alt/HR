@@ -1,9 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from pathlib import Path
+
+
+ROOT = Path(SPECPATH)
+ICON_PATH = str(ROOT / 'assets' / 'salary_calc.ico')
+
 
 a = Analysis(
     ['app.py'],
-    pathex=[],
+    pathex=[str(ROOT)],
     binaries=[],
     datas=[],
     hiddenimports=[],
@@ -35,5 +41,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['C:\\Users\\Kasidid\\Desktop\\โปรแกรมสร้างใบงาน\\salary_calc\\assets\\salary_calc.ico'],
+    icon=ICON_PATH,
 )

@@ -95,7 +95,7 @@ class AddEmployeeDialog(QDialog):
 
         # Fix rate selector - ใช้กับ 5.5
         self.fix_rate = QComboBox()
-        self.fix_rate.addItem("🔄 เลือก Fix Rate...", "")
+        self.fix_rate.addItem("🔄 เลือก Fix Rate...", "__SELECT__")
         self.fix_rate.addItem("Free", "")
         for v in [400, 500, 800, 1000, 1200, 1500, 2000, 750]:
             self.fix_rate.addItem(f"💰 fix rate {v}", str(v))
@@ -178,12 +178,16 @@ class AddEmployeeDialog(QDialog):
     def on_save(self):
         try:
             plan = self.rate_plan.currentData()
+            if not plan:
+                raise ValueError("กรุณาเลือกแผนเงินรายหัว")
 
             d = self.start_date.date().toPython()  # datetime.date
             start_ts = pd.Timestamp(d)
 
             # scoring
             scoring_val = self.scoring.currentData()
+            if not scoring_val:
+                raise ValueError("กรุณาเลือก Scoring")
             if scoring_val == "FREE":
                 scoring_mode = "FREE"
                 scoring_fix = None
@@ -195,7 +199,9 @@ class AddEmployeeDialog(QDialog):
             fix_rate_val = None
             if plan == "5.5":
                 raw = self.fix_rate.currentData()
-                if raw == "":
+                if raw == "__SELECT__":
+                    raise ValueError("กรุณาเลือก Fix Rate หรือ Free")
+                elif raw == "":
                     fix_rate_val = None
                 elif raw == "__OTHER__":
                     txt = (self.fix_rate_other.text() or "").strip()
@@ -211,7 +217,10 @@ class AddEmployeeDialog(QDialog):
             # cond after fix (plan 5.6)
             cond_after_fix = None
             if plan == "5.6":
-                cond_after_fix = int(self.cond_after_fix.currentData())
+                raw_cond = self.cond_after_fix.currentData()
+                if not raw_cond:
+                    raise ValueError("กรุณาเลือกอัตราหลัง 15 เคสแรก")
+                cond_after_fix = int(raw_cond)
 
             inp = EmployeeInput(
                 first_name=self.first_name.text(),

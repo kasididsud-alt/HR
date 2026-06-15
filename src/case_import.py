@@ -1,6 +1,9 @@
 # src/case_import.py
 from __future__ import annotations
 
+import os
+import re
+
 import pandas as pd
 
 
@@ -46,6 +49,21 @@ NUM_COLS = [
     "15 เคสแรก",
     "ส่วนลด",
 ]
+
+MONTH_NAME_TO_NUMBER = {
+    "january": 1,
+    "february": 2,
+    "march": 3,
+    "april": 4,
+    "may": 5,
+    "june": 6,
+    "july": 7,
+    "august": 8,
+    "september": 9,
+    "october": 10,
+    "november": 11,
+    "december": 12,
+}
 
 
 def is_empty_person_value(value) -> bool:
@@ -128,6 +146,51 @@ def _parse_exam_date(series: pd.Series) -> pd.Series:
     return out
 
 
+def _infer_case_year_from_path(path: str) -> int | None:
+    name = os.path.basename(str(path))
+    for raw in re.findall(r"(?<!\d)(25\d{2}|20\d{2})(?!\d)", name):
+        year = int(raw)
+        if 2500 <= year <= 2600:
+            return year - 543
+        if 2000 <= year <= 2100:
+            return year
+    return None
+
+
+def _sheet_month_number(sheet_name: str | int | None) -> int | None:
+    if sheet_name is None or isinstance(sheet_name, int):
+        return None
+    return MONTH_NAME_TO_NUMBER.get(str(sheet_name).strip().lower())
+
+
+def _normalize_exam_years(
+    dates: pd.Series, path: str, sheet_name: str | int | None
+) -> pd.Series:
+    """
+    Files named with Thai Buddhist years sometimes contain two-digit Excel dates
+    such as 13-May-69, which Excel stores as 1969 or 2069. For monthly case
+    sheets, normalize those suspicious years back to the report year.
+    """
+    target_year = _infer_case_year_from_path(path)
+    if target_year is None:
+        return dates
+
+    out = dates.copy()
+    years = out.dt.year
+    mask = years.isin([target_year - 57, target_year + 43])
+
+    sheet_month = _sheet_month_number(sheet_name)
+    if sheet_month is not None:
+        mask = mask & out.dt.month.eq(sheet_month)
+
+    if mask.any():
+        out.loc[mask] = out.loc[mask].map(
+            lambda ts: ts.replace(year=target_year) if pd.notna(ts) else ts
+        )
+
+    return out
+
+
 def load_cases_xlsx(path: str, sheet_name: str | int | None = None) -> pd.DataFrame:
     # default first sheet
     df = pd.read_excel(path, sheet_name=0 if sheet_name is None else sheet_name)
@@ -138,7 +201,9 @@ def load_cases_xlsx(path: str, sheet_name: str | int | None = None) -> pd.DataFr
         raise ValueError(f"ชีทนี้ขาดคอลัมน์: {', '.join(missing)}")
 
     # ✅ 날짜 parse (กัน day/month กลับ)
-    df["วันที่ตรวจ"] = _parse_exam_date(df["วันที่ตรวจ"])
+    df["วันที่ตรวจ"] = _normalize_exam_years(
+        _parse_exam_date(df["วันที่ตรวจ"]), path, sheet_name
+    )
 
     # ✅ normalize person columns
     for c in PERSON_COLS:

@@ -12,6 +12,7 @@ RatePlan = Literal["5.1", "5.2", "5.3", "5.4", "5.5", "5.6"]
 ScoringMode = Literal["FREE", "FIX"]
 
 EMP_SHEET = "employees"
+VALID_RATE_PLANS = ("5.1", "5.2", "5.3", "5.4", "5.5", "5.6")
 
 # ✅ ไม่มี rate_set แล้ว
 EMP_COLUMNS = [
@@ -67,6 +68,33 @@ def _ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def parse_active_value(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    try:
+        if value is None or pd.isna(value):
+            return True
+    except Exception:
+        if value is None:
+            return True
+
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value) != 0.0
+
+    text = str(value).strip().lower()
+    if text in ("", "nan", "none"):
+        return True
+    if text in ("false", "f", "0", "0.0", "no", "n", "inactive", "ปิด", "ไม่ใช้งาน", "ลบ"):
+        return False
+    if text in ("true", "t", "1", "1.0", "yes", "y", "active", "ใช้งาน"):
+        return True
+    return True
+
+
+def normalize_active_series(series: pd.Series) -> pd.Series:
+    return series.map(parse_active_value).astype(bool)
+
+
 def load_employees_xlsx(master_dir: str) -> pd.DataFrame:
     path = os.path.join(master_dir, "employees.xlsx")
     if not os.path.exists(path):
@@ -88,7 +116,7 @@ def load_employees_xlsx(master_dir: str) -> pd.DataFrame:
     df["rate_mode"] = df["rate_mode"].astype(str).str.strip().str.upper()
     df["scoring_mode"] = df["scoring_mode"].astype(str).str.strip().str.upper()
 
-    df["active"] = df["active"].fillna(True).astype(bool)
+    df["active"] = normalize_active_series(df["active"])
     df["start_date"] = pd.to_datetime(df["start_date"], errors="coerce")
 
     return df
@@ -126,11 +154,12 @@ def generate_next_emp_code(existing_codes: list[str], prefix="E", width=3) -> st
 
 
 def _rate_mode_from_plan(inp: EmployeeInput) -> str:
-    if inp.rate_plan in ("5.1", "5.2", "5.3", "5.4"):
+    rate_plan = str(inp.rate_plan).strip()
+    if rate_plan in ("5.1", "5.2", "5.3", "5.4"):
         return "SET"
-    if inp.rate_plan == "5.5":
+    if rate_plan == "5.5":
         return "FREE" if inp.fix_rate is None else "FIX"
-    if inp.rate_plan == "5.6":
+    if rate_plan == "5.6":
         return "COND15"
     return "SET"
 
@@ -143,11 +172,17 @@ def validate_employee_input(inp: EmployeeInput) -> None:
     if pd.isna(inp.start_date):
         raise ValueError("กรุณาเลือกวันเริ่มทำงาน")
 
-    if inp.rate_plan == "5.5":
+    rate_plan = str(inp.rate_plan).strip()
+    if rate_plan not in VALID_RATE_PLANS:
+        raise ValueError("กรุณาเลือกแผนเงินรายหัว")
+
+    if rate_plan == "5.5":
+        if inp.fix_rate is not None and pd.isna(inp.fix_rate):
+            raise ValueError("Fix Rate ไม่ถูกต้อง")
         if inp.fix_rate is not None and float(inp.fix_rate) < 0:
             raise ValueError("Fix Rate ต้องไม่ติดลบ")
 
-    if inp.rate_plan == "5.6":
+    if rate_plan == "5.6":
         if inp.cond_free_first_n <= 0:
             raise ValueError("จำนวนเคสฟรี (15 เคสแรก) ต้องมากกว่า 0")
         if inp.cond_after_fix_rate not in (750, 1500):
@@ -160,7 +195,10 @@ def validate_employee_input(inp: EmployeeInput) -> None:
             raise ValueError("แผน 5.6 ประเภทการจ่ายต้องเป็น: ประกันสังคม หรือ เงินสด")
 
     # scoring
-    if inp.scoring_mode == "FIX":
+    scoring_mode = str(inp.scoring_mode).strip().upper()
+    if scoring_mode not in ("FREE", "FIX"):
+        raise ValueError("กรุณาเลือก Scoring")
+    if scoring_mode == "FIX":
         if inp.scoring_fix not in (200, 500):
             raise ValueError("Scoring FIX ต้องเป็น 200 หรือ 500")
 
@@ -178,21 +216,22 @@ def add_employee(master_dir: str, inp: EmployeeInput) -> str:
     full_name = f"{inp.first_name.strip()} {inp.last_name.strip()}".strip()
     display_name = inp.display_name.strip() or full_name
 
+    rate_plan = str(inp.rate_plan).strip()
     rate_mode = _rate_mode_from_plan(inp)
     fix_rate = (
-        float(inp.fix_rate) if (rate_mode == "FIX" and inp.fix_rate is not None) else ""
+        float(inp.fix_rate) if (rate_mode == "FIX" and inp.fix_rate is not None) else None
     )
 
-    cond_free_first_n = inp.cond_free_first_n if rate_mode == "COND15" else ""
-    cond_after_fix_rate = inp.cond_after_fix_rate if rate_mode == "COND15" else ""
+    cond_free_first_n = inp.cond_free_first_n if rate_mode == "COND15" else None
+    cond_after_fix_rate = inp.cond_after_fix_rate if rate_mode == "COND15" else None
     # auto pay type ตามอัตรา (กันกรอกผิด)
     if rate_mode == "COND15":
         pay_type = "ประกันสังคม" if inp.cond_after_fix_rate == 750 else "เงินสด"
     else:
         pay_type = ""
 
-    scoring_mode = inp.scoring_mode
-    scoring_fix = inp.scoring_fix if scoring_mode == "FIX" else ""
+    scoring_mode = str(inp.scoring_mode).strip().upper()
+    scoring_fix = inp.scoring_fix if scoring_mode == "FIX" else None
 
     row = {
         "emp_code": new_code,
@@ -201,7 +240,7 @@ def add_employee(master_dir: str, inp: EmployeeInput) -> str:
         "full_name": full_name,
         "display_name": display_name,
         "start_date": pd.to_datetime(inp.start_date),
-        "rate_plan": inp.rate_plan,
+        "rate_plan": rate_plan,
         "rate_mode": rate_mode,
         "fix_rate": fix_rate,
         "cond_free_first_n": cond_free_first_n,

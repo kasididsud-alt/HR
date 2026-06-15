@@ -29,6 +29,16 @@ def _msg_info(parent, text: str):
     QMessageBox.information(parent, "Done", text)
 
 
+def _clean_text(value) -> str:
+    try:
+        if value is None or pd.isna(value):
+            return ""
+    except Exception:
+        if value is None:
+            return ""
+    return str(value)
+
+
 class EditEmployeeDialog(QDialog):
     """
     ฟอร์มแก้ไขพนักงาน (อัปเดตลง master/employees.xlsx)
@@ -136,10 +146,10 @@ class EditEmployeeDialog(QDialog):
                 return
 
     def _prefill_from_row(self):
-        self.first_name.setText(str(self.emp_row.get("first_name", "") or ""))
-        self.last_name.setText(str(self.emp_row.get("last_name", "") or ""))
-        self.display_name.setText(str(self.emp_row.get("display_name", "") or ""))
-        self.note.setText(str(self.emp_row.get("note", "") or ""))
+        self.first_name.setText(_clean_text(self.emp_row.get("first_name", "")))
+        self.last_name.setText(_clean_text(self.emp_row.get("last_name", "")))
+        self.display_name.setText(_clean_text(self.emp_row.get("display_name", "")))
+        self.note.setText(_clean_text(self.emp_row.get("note", "")))
 
         # start_date
         sd = pd.to_datetime(self.emp_row.get("start_date", None), errors="coerce")

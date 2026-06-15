@@ -6,12 +6,17 @@ import pandas as pd
 from PySide6 import QtCore, QtWidgets
 
 from .excel_io import to_excel_bytes
-from .fee_calc import normalize_doctor_name
+from .fee_calc import has_scoring_doctor_prefix, normalize_doctor_name
 
 
 DATE_COL = "\u0e27\u0e31\u0e19\u0e17\u0e35\u0e48\u0e15\u0e23\u0e27\u0e08"
 HOSPITAL_COL = "\u0e42\u0e23\u0e07\u0e1e\u0e22\u0e32\u0e1a\u0e32\u0e25"
 REFER_COL = "\u0e2b\u0e21\u0e2d\u0e2a\u0e48\u0e07"
+
+
+def _clean_key_series(series: pd.Series) -> pd.Series:
+    out = series.where(series.notna(), "").astype(str).str.strip()
+    return out.mask(out.str.lower().isin(["nan", "none"]), "")
 
 
 class DoctorDetailDialog(QtWidgets.QDialog):
@@ -52,6 +57,7 @@ class DoctorDetailDialog(QtWidgets.QDialog):
             DATE_COL,
             HOSPITAL_COL,
             REFER_COL,
+            "คำนำหน้า",
             "Scoring Tech",
             "Interpret MD",
             "Scoring Fee",
@@ -115,14 +121,25 @@ class DoctorDetailDialog(QtWidgets.QDialog):
         if dfc is None or dfc.empty:
             return pd.DataFrame(columns=columns)
 
-        for col in [DATE_COL, HOSPITAL_COL, REFER_COL, "Scoring Tech", "Interpret MD", "IV"]:
+        for col in [
+            DATE_COL,
+            HOSPITAL_COL,
+            REFER_COL,
+            "คำนำหน้า",
+            "Scoring Tech",
+            "Interpret MD",
+            "IV",
+        ]:
             if col not in dfc.columns:
                 dfc[col] = ""
         for col in ["Scoring Fee", "Physician Fee"]:
             if col not in dfc.columns:
                 dfc[col] = 0.0
 
-        dfc["_scoring_key"] = dfc["Scoring Tech"].map(normalize_doctor_name)
+        scoring_has_prefix = dfc["คำนำหน้า"].map(has_scoring_doctor_prefix)
+        dfc["_scoring_key"] = dfc["Scoring Tech"].where(
+            scoring_has_prefix, ""
+        ).map(normalize_doctor_name)
         dfc["_interpret_key"] = dfc["Interpret MD"].map(normalize_doctor_name)
 
         dfc = dfc[
@@ -147,12 +164,12 @@ class DoctorDetailDialog(QtWidgets.QDialog):
         )
         dfc["total_amount"] = dfc["Scoring Fee"] + dfc["Physician Fee"]
 
-        case_key = dfc["IV"].astype(str).str.strip()
+        case_key = _clean_key_series(dfc["IV"])
         if "case_key" in dfc.columns:
-            fallback_case_key = dfc["case_key"].astype(str).str.strip()
+            fallback_case_key = _clean_key_series(dfc["case_key"])
             case_key = case_key.where(case_key != "", fallback_case_key)
         if "_join_key" in dfc.columns:
-            join_fallback = dfc["_join_key"].astype(str).str.strip()
+            join_fallback = _clean_key_series(dfc["_join_key"])
             case_key = case_key.where(case_key != "", join_fallback)
         case_key = case_key.where(case_key != "", dfc.index.astype(str))
         dfc["case_key"] = case_key

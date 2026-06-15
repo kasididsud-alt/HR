@@ -35,23 +35,23 @@ def update_employee_by_code(master_dir: str, emp_code: str, inp: EmployeeInput) 
     full_name = f"{inp.first_name.strip()} {inp.last_name.strip()}".strip()
     display_name = inp.display_name.strip() or full_name
 
-    rate_plan = inp.rate_plan
+    rate_plan = str(inp.rate_plan).strip()
     rate_mode = _rate_mode_from_plan(rate_plan, inp.fix_rate)
 
     fix_rate = (
-        float(inp.fix_rate) if (rate_mode == "FIX" and inp.fix_rate is not None) else ""
+        float(inp.fix_rate) if (rate_mode == "FIX" and inp.fix_rate is not None) else None
     )
 
     # plan 5.6
-    cond_free_first_n = inp.cond_free_first_n if rate_mode == "COND15" else ""
-    cond_after_fix_rate = inp.cond_after_fix_rate if rate_mode == "COND15" else ""
+    cond_free_first_n = inp.cond_free_first_n if rate_mode == "COND15" else None
+    cond_after_fix_rate = inp.cond_after_fix_rate if rate_mode == "COND15" else None
     if rate_mode == "COND15":
         pay_type = "ประกันสังคม" if inp.cond_after_fix_rate == 750 else "เงินสด"
     else:
         pay_type = ""
 
-    scoring_mode = inp.scoring_mode
-    scoring_fix = inp.scoring_fix if scoring_mode == "FIX" else ""
+    scoring_mode = str(inp.scoring_mode).strip().upper()
+    scoring_fix = inp.scoring_fix if scoring_mode == "FIX" else None
 
     # อัปเดตลง df (อัปเดตเฉพาะคอลัมน์ที่เราคุม)
     update_map = {

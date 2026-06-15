@@ -29,6 +29,24 @@ def _num(x) -> float:
         return 0.0
 
 
+def _positive_int_or_default(x, default: int) -> int:
+    v = _num(x)
+    if v <= 0:
+        return int(default)
+    return int(v)
+
+
+def _clean_key(value) -> str:
+    try:
+        if value is None or pd.isna(value):
+            return ""
+    except Exception:
+        if value is None:
+            return ""
+    text = str(value).strip()
+    return "" if text.lower() in ("nan", "none") else text
+
+
 def parse_discount_value(x) -> float:
     """
     ✅ รองรับรูปแบบส่วนลดหลายแบบ:
@@ -160,6 +178,11 @@ def _is_md_prefix_400(prefix: str) -> bool:
     """
     p = str(prefix or "").strip().replace(" ", "")
     return p.startswith("นพ") or p.startswith("พญ")
+
+
+def has_scoring_doctor_prefix(prefix: str) -> bool:
+    """Scoring Tech is treated as a doctor only when the prefix cell is filled."""
+    return not is_empty_person_value(prefix)
 
 
 # =========================
@@ -405,7 +428,7 @@ def compute_case_fees(
     doctor_rows: list[dict] = []
 
     for idx, row in case_out.iterrows():
-        case_key = str(row.get("IV", "") or "").strip()
+        case_key = _clean_key(row.get("IV", ""))
         if not case_key:
             case_key = str(idx)
         join_key = str(idx)
@@ -464,8 +487,8 @@ def compute_case_fees(
             if not is_active_on(emp1, case_date_for_rate):
                 fee1 = 0.0
             elif mode == "COND15":
-                n_free = int(emp1.get("cond_free_first_n", 15) or 15)
-                after_rate = float(emp1.get("cond_after_fix_rate", 0) or 0)
+                n_free = _positive_int_or_default(emp1.get("cond_free_first_n", 15), 15)
+                after_rate = _num(emp1.get("cond_after_fix_rate", 0))
                 seq = case_out.at[idx, "_seq_emp1"]
                 is_free_seq = seq is not None and int(seq) <= n_free
                 fee1 = 0.0 if is_free_seq else after_rate
@@ -510,8 +533,8 @@ def compute_case_fees(
             if not is_active_on(emp2, case_date_for_rate):
                 fee2 = 0.0
             elif mode2 == "COND15":
-                n_free2 = int(emp2.get("cond_free_first_n", 15) or 15)
-                after_rate2 = float(emp2.get("cond_after_fix_rate", 0) or 0)
+                n_free2 = _positive_int_or_default(emp2.get("cond_free_first_n", 15), 15)
+                after_rate2 = _num(emp2.get("cond_after_fix_rate", 0))
                 seq2 = case_out.at[idx, "_seq_emp2"]
                 is_free_seq2 = seq2 is not None and int(seq2) <= n_free2
                 fee2 = 0.0 if is_free_seq2 else after_rate2
@@ -630,7 +653,9 @@ def compute_case_fees(
         # -----------------------------
         # Doctor tracking
         # -----------------------------
-        if scoring_tech_name:
+        scoring_is_doctor = scoring_tech_name and has_scoring_doctor_prefix(prefix_raw)
+
+        if scoring_is_doctor:
             # Check if scoring doctor is free
             sfee_for_doctor = sfee
             if is_doctor_free(scoring_tech_name, case_date):
@@ -644,6 +669,7 @@ def compute_case_fees(
                         "doctor_name_raw": scoring_tech_name,
                         "source_col": "Scoring Tech",
                         "case_key": case_key,
+                        "join_key": join_key,
                         "โรงพยาบาล": hosp,
                         "Type": t,
                         "amount": float(sfee_for_doctor),
@@ -664,6 +690,7 @@ def compute_case_fees(
                         "doctor_name_raw": interpret,
                         "source_col": "Interpret MD",
                         "case_key": case_key,
+                        "join_key": join_key,
                         "โรงพยาบาล": hosp,
                         "Type": t,
                         "amount": float(pfee_for_doctor),
@@ -703,8 +730,9 @@ def compute_case_fees(
 
     doctor_details = pd.DataFrame(doctor_rows)
     if not doctor_details.empty:
+        doctor_count_col = "join_key" if "join_key" in doctor_details.columns else "case_key"
         doctor_summary = doctor_details.groupby(["doctor_key"], as_index=False).agg(
-            found_count=("doctor_key", "size"),
+            found_count=(doctor_count_col, "nunique"),
             total_amount=("amount", "sum"),
         )
     else:

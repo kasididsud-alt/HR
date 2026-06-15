@@ -3,7 +3,7 @@ Modern UI Styles for Salary Calculator Application
 """
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QLabel, QPushButton, QGraphicsDropShadowEffect, QStyle
 
 # Modern color palette
@@ -35,6 +35,22 @@ QMainWindow {{
     color: {COLORS['text_primary']};
     font-family: 'Segoe UI', 'Microsoft Sans Serif', sans-serif;
     font-size: 14px;
+}}
+
+QDialog {{
+    background-color: {COLORS['background']};
+    color: {COLORS['text_primary']};
+    font-family: 'Segoe UI', 'Microsoft Sans Serif', sans-serif;
+    font-size: 14px;
+}}
+
+QScrollArea {{
+    background-color: {COLORS['background']};
+    border: none;
+}}
+
+QScrollArea > QWidget {{
+    background-color: {COLORS['background']};
 }}
 
 /* Group Box - Modern Card Style */
@@ -154,6 +170,21 @@ QLineEdit:disabled {{
     color: {COLORS['text_secondary']};
 }}
 
+QTextEdit {{
+    background-color: {COLORS['surface']};
+    border: 1px solid {COLORS['border_strong']};
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 14px;
+    color: {COLORS['text_primary']};
+    selection-background-color: {COLORS['primary_light']};
+    selection-color: {COLORS['text_primary']};
+}}
+
+QTextEdit:focus {{
+    border-color: {COLORS['primary']};
+}}
+
 /* Combo Box */
 QComboBox {{
     background-color: {COLORS['surface']};
@@ -227,6 +258,13 @@ QTableWidget::item {{
 QTableWidget::item:selected {{
     background-color: {COLORS['primary_light']};
     color: {COLORS['text_primary']};
+}}
+
+QTableCornerButton::section {{
+    background-color: {COLORS['surface_alt']};
+    border: none;
+    border-bottom: 1px solid {COLORS['border_strong']};
+    border-right: 1px solid {COLORS['border']};
 }}
 
 QHeaderView::section {{
@@ -313,6 +351,44 @@ QStatusBar {{
     color: {COLORS['text_secondary']};
 }}
 
+QTabWidget::pane {{
+    background-color: {COLORS['surface']};
+    border: 1px solid {COLORS['border']};
+    border-radius: 8px;
+    top: -1px;
+}}
+
+QTabBar::tab {{
+    background-color: {COLORS['surface_alt']};
+    color: {COLORS['text_secondary']};
+    border: 1px solid {COLORS['border']};
+    border-bottom: none;
+    padding: 8px 14px;
+    margin-right: 2px;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    font-weight: 600;
+}}
+
+QTabBar::tab:selected {{
+    background-color: {COLORS['surface']};
+    color: {COLORS['text_primary']};
+    border-color: {COLORS['border_strong']};
+}}
+
+QTabBar::tab:hover {{
+    color: {COLORS['secondary']};
+}}
+
+QListWidget {{
+    background-color: {COLORS['surface']};
+    border: 1px solid {COLORS['border_strong']};
+    border-radius: 8px;
+    color: {COLORS['text_primary']};
+    selection-background-color: {COLORS['primary_light']};
+    selection-color: {COLORS['text_primary']};
+}}
+
 QProgressBar {{
     background-color: #e7eef8;
     border: none;
@@ -386,6 +462,35 @@ QCalendarWidget QAbstractItemView:enabled {{
 def get_style_sheet():
     """Return the modern style sheet"""
     return MODERN_STYLE
+
+
+def apply_light_app_palette(app):
+    """Keep the app's light theme stable on macOS dark appearance."""
+    if hasattr(app.styleHints(), "setColorScheme") and hasattr(Qt, "ColorScheme"):
+        app.styleHints().setColorScheme(Qt.ColorScheme.Light)
+
+    palette = app.palette()
+    palette.setColor(QPalette.Window, QColor(COLORS['background']))
+    palette.setColor(QPalette.WindowText, QColor(COLORS['text_primary']))
+    palette.setColor(QPalette.Base, QColor(COLORS['surface']))
+    palette.setColor(QPalette.AlternateBase, QColor(COLORS['surface_alt']))
+    palette.setColor(QPalette.ToolTipBase, QColor(COLORS['text_primary']))
+    palette.setColor(QPalette.ToolTipText, QColor(COLORS['surface']))
+    palette.setColor(QPalette.Text, QColor(COLORS['text_primary']))
+    palette.setColor(QPalette.Button, QColor(COLORS['surface']))
+    palette.setColor(QPalette.ButtonText, QColor(COLORS['text_primary']))
+    palette.setColor(QPalette.BrightText, QColor("#ffffff"))
+    palette.setColor(QPalette.Highlight, QColor(COLORS['primary_light']))
+    palette.setColor(QPalette.HighlightedText, QColor(COLORS['text_primary']))
+
+    disabled_text = QColor(COLORS['text_secondary'])
+    palette.setColor(QPalette.Disabled, QPalette.WindowText, disabled_text)
+    palette.setColor(QPalette.Disabled, QPalette.Text, disabled_text)
+    palette.setColor(QPalette.Disabled, QPalette.ButtonText, disabled_text)
+    palette.setColor(QPalette.Disabled, QPalette.Button, QColor(COLORS['background']))
+    palette.setColor(QPalette.Disabled, QPalette.Base, QColor(COLORS['background']))
+
+    app.setPalette(palette)
 
 
 def _icon_for_button(style, text: str):

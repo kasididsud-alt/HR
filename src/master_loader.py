@@ -1,5 +1,7 @@
 import pandas as pd
 
+from src.employee_store import normalize_active_series
+
 ROLE_COLUMNS = {
     "Monitor Tech": "MonitorTech",
     "Monitor Tech (2)": "MonitorTech2",
@@ -12,7 +14,7 @@ def load_employees(master_dir: str = "master") -> pd.DataFrame:
     emp = pd.read_excel(f"{master_dir}/employees.xlsx", sheet_name="employees")
     emp["start_date"] = pd.to_datetime(emp["start_date"], errors="coerce")
     emp["emp_code"] = emp["emp_code"].astype(str).str.strip()
-    emp["active"] = emp["active"].fillna(True).astype(bool)
+    emp["active"] = normalize_active_series(emp["active"])
 
     # normalize
     for c in ["rate_mode", "rate_set", "scoring_mode"]:
@@ -26,8 +28,12 @@ def load_aliases(master_dir: str = "master") -> pd.DataFrame:
     al = pd.read_excel(f"{master_dir}/aliases.xlsx", sheet_name="aliases")
     al["alias_name"] = al["alias_name"].astype(str).str.strip()
     al["emp_code"] = al["emp_code"].astype(str).str.strip()
-    al["source_col"] = al.get("source_col", "").fillna("").astype(str).str.strip()
-    al["active"] = al["active"].fillna(True).astype(bool)
+    if "source_col" not in al.columns:
+        al["source_col"] = ""
+    if "active" not in al.columns:
+        al["active"] = True
+    al["source_col"] = al["source_col"].fillna("").astype(str).str.strip()
+    al["active"] = normalize_active_series(al["active"])
     return al[al["active"]].copy()
 
 
