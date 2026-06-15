@@ -1,0 +1,32 @@
+# Build and distribution directories
+build/
+dist/
+__pycache__/
+
+# Python cache
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Excel temp files
+~$*.xlsx
+~$*.xls
+
+# Test outputs
+*.log
